@@ -127,3 +127,19 @@ User: root
   FAILED   /home/erwann/.ssh/id_rsa
 ```
 
+## SSH key management
+
+Add, remove, or replace public keys for `admin`, `ansible`, and `root` through
+public-key SSH access as `admin`. Target accepts IP addr, hostname, or SSH Host
+alias.
+
+`--key` selects private key whose public key is managed. Use `--public-key` to
+manage public key directly. Every operation targets `admin`, `ansible`, and `root`.
+`replace` overwrites all three `authorized_keys` files.
+
+```sh
+./ssh_key_manage.py seapath-host add --key ~/.ssh/id_ed25519
+./ssh_key_manage.py 192.0.2.10 add --public-key ~/.ssh/new_key.pub --login-key ~/.ssh/admin_key
+./ssh_key_manage.py seapath-host remove --key ~/.ssh/id_ed25519
+./ssh_key_manage.py seapath-host replace --key ~/.ssh/new_admin_key
+```
