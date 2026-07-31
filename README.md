@@ -94,3 +94,36 @@ Example:
     60     882  IR-PCI-MSIX-0000:01:00.0 3-edge eno1-rx-3  SCHED_FIFO          50   90       12  12
     61     883  IR-PCI-MSIX-0000:01:00.0 4-edge eno1-rx-4  SCHED_FIFO          50   90        3  3
 ```
+
+## SSH key test
+
+Test public-key SSH access to a SEAPATH machine.
+Machine can be given as IP addr or ssh Hostname.
+Tries every private key found in `~/.ssh` for `admin`,
+`ansible`, and `root` and prints every working user/key pair.
+
+```sh
+./ssh_key_test.py 192.0.2.10
+./ssh_key_test.py seapath-host
+```
+
+Example:
+
+```text
+$ ./ssh_key_test.py seapath-host
+Target: seapath-host
+Private keys: 2
+
+User: admin
+  FAILED   /home/erwann/.ssh/id_ed25519
+  SUCCESS  /home/erwann/.ssh/id_rsa
+
+User: ansible
+  FAILED   /home/erwann/.ssh/id_ed25519
+  FAILED   /home/erwann/.ssh/id_rsa
+
+User: root
+  FAILED   /home/erwann/.ssh/id_ed25519
+  FAILED   /home/erwann/.ssh/id_rsa
+```
+
