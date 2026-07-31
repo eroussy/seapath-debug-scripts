@@ -4,11 +4,13 @@
 """Test SSH public-key authentication for standard SEAPATH users."""
 
 import argparse
+import base64
 import os
 import select
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -53,6 +55,9 @@ def private_keys(ssh_directory):
     for entry in entries:
         if not is_private_key(entry):
             continue
+        if is_encrypted_private_key(entry):
+            print(f"Skipping encrypted private key: {entry}", file=sys.stderr)
+            continue
         keys.append(entry)
     return keys
 
@@ -67,6 +72,51 @@ def is_private_key(path):
         print(f"Skipping unreadable file: {path}", file=sys.stderr)
         return False
     return b"PRIVATE KEY" in header or header.startswith(b"-----BEGIN OPENSSH")
+
+
+def is_encrypted_private_key(path):
+    """Return whether path contains an encrypted supported private key format."""
+    try:
+        contents = path.read_bytes()
+    except PermissionError:
+        return False
+    if b"-----BEGIN ENCRYPTED PRIVATE KEY-----" in contents:
+        return True
+    if b"Proc-Type: 4,ENCRYPTED" in contents:
+        return True
+
+    lines = contents.splitlines()
+    if not lines or lines[0] != b"-----BEGIN OPENSSH PRIVATE KEY-----":
+        return False
+    try:
+        encoded = b"".join(line for line in lines[1:] if not line.startswith(b"-----"))
+        data = base64.b64decode(encoded, validate=True)
+        if not data.startswith(b"openssh-key-v1\0"):
+            return False
+        offset = len(b"openssh-key-v1\0")
+        cipher_length = int.from_bytes(data[offset : offset + 4], "big")
+        cipher = data[offset + 4 : offset + 4 + cipher_length]
+    except (ValueError, IndexError):
+        return False
+    return cipher != b"none"
+
+
+def agent_public_keys():
+    """Return public keys currently available through ssh-agent."""
+    try:
+        result = subprocess.run(
+            ["ssh-add", "-L"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+    if result.returncode:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
 
 
 def ssh_config(target):
@@ -93,7 +143,7 @@ def ssh_config(target):
     return config
 
 
-def ssh_command(target, user, key, timeout, config):
+def ssh_command(target, user, key, timeout, config, use_agent=False):
     command = [
         "ssh",
         "-F",
@@ -103,13 +153,13 @@ def ssh_command(target, user, key, timeout, config):
         value = config.get(option.lower())
         if value and value.lower() != "none":
             command.extend((SSH_OPTION, f"{option}={value}"))
+    if not use_agent:
+        command.extend((SSH_OPTION, "IdentityAgent=none"))
     return command + [
         SSH_OPTION,
         "BatchMode=yes",
         SSH_OPTION,
         "IdentitiesOnly=yes",
-        SSH_OPTION,
-        "IdentityAgent=none",
         SSH_OPTION,
         "PasswordAuthentication=no",
         SSH_OPTION,
@@ -130,10 +180,10 @@ def ssh_command(target, user, key, timeout, config):
     ]
 
 
-def test_key(target, user, key, timeout, config):
+def test_key(target, user, key, timeout, config, use_agent=False):
     try:
         process = subprocess.Popen(
-            ssh_command(target, user, key, timeout, config),
+            ssh_command(target, user, key, timeout, config, use_agent),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -220,13 +270,16 @@ def main():
         key = args.key.expanduser()
         if not is_private_key(key):
             parser.error(f"not a readable private SSH key: {key}")
+        if is_encrypted_private_key(key):
+            parser.error(f"encrypted private SSH key: {key}")
         keys = [key]
     else:
         try:
             keys = private_keys(args.ssh_dir.expanduser())
         except RuntimeError as error:
             parser.error(str(error))
-    if not keys:
+    agent_keys = [] if args.key else agent_public_keys()
+    if not keys and not agent_keys:
         print(f"No private SSH keys found in {args.ssh_dir.expanduser()}", file=sys.stderr)
         return 1
 
@@ -234,26 +287,39 @@ def main():
     key_count = f"Private keys: {len(keys)}"
     print(colorize(target, "cyan", "bold") if colored else target)
     print(colorize(key_count, "cyan") if colored else key_count)
+    if agent_keys:
+        agent_count = f"SSH-agent keys: {len(agent_keys)}"
+        print(colorize(agent_count, "cyan") if colored else agent_count)
     found = False
-    for user in USERS:
-        heading = f"\nUser: {user}"
-        print(colorize(heading, "cyan", "bold") if colored else heading)
-        for key in keys:
-            success, reason = test_key(args.target, user, key, args.timeout, config)
-            if success:
-                status = "  SUCCESS"
-                if colored:
-                    status = colorize(status, "green", "bold")
-                print(f"{status}  {key}")
-                found = True
-            else:
-                status = "  FAILED "
-                if colored:
-                    status = colorize(status, "red", "bold")
-                print(f"{status}  {key}")
-                if args.debug:
-                    detail = f"           {reason}"
-                    print(colorize(detail, "yellow") if colored else detail)
+    with tempfile.TemporaryDirectory(prefix="ssh-key-test-") as directory:
+        agent_identities = []
+        for index, public_key in enumerate(agent_keys, start=1):
+            path = Path(directory) / f"agent-{index}.pub"
+            path.write_text(f"{public_key}\n", encoding="utf-8")
+            agent_identities.append((path, f"ssh-agent: {public_key}"))
+        identities = [(key, str(key), False) for key in keys]
+        identities.extend((key, label, True) for key, label in agent_identities)
+        for user in USERS:
+            heading = f"\nUser: {user}"
+            print(colorize(heading, "cyan", "bold") if colored else heading)
+            for key, label, use_agent in identities:
+                success, reason = test_key(
+                    args.target, user, key, args.timeout, config, use_agent
+                )
+                if success:
+                    status = "  SUCCESS"
+                    if colored:
+                        status = colorize(status, "green", "bold")
+                    print(f"{status}  {label}")
+                    found = True
+                else:
+                    status = "  FAILED "
+                    if colored:
+                        status = colorize(status, "red", "bold")
+                    print(f"{status}  {label}")
+                    if args.debug:
+                        detail = f"           {reason}"
+                        print(colorize(detail, "yellow") if colored else detail)
 
     return 0 if found else 1
 

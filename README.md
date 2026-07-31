@@ -99,8 +99,9 @@ Example:
 
 Test public-key SSH access to a SEAPATH machine.
 Machine can be given as IP addr or ssh Hostname.
-Tries every private key found in `~/.ssh` for `admin`,
-`ansible`, and `root` and prints every working user/key pair.
+Tries every unencrypted private key found in `~/.ssh` plus each key loaded in
+running `ssh-agent`, for `admin`, `ansible`, and `root`. Encrypted private keys
+are skipped to avoid passphrase prompts. Prints every working user/key pair.
 
 ```sh
 ./ssh_key_test.py 192.0.2.10
