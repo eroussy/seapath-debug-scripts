@@ -36,6 +36,17 @@ Example:
    1593  kvm-pit/1580             SCHED_RR             1   41        9  9              0.0%
 ```
 
+## Process threads report
+
+Display scheduler, priority, last CPU, effective affinity, and average CPU usage
+since start for every thread in a process. `CPU%` is a percentage of one logical
+CPU; it is not a live interval measurement. Run as root for complete visibility.
+
+```sh
+./process_threads_report.py process
+./process_threads_report.py --pid 1580
+```
+
 ## CPU task report
 
 Display every process thread last scheduled on selected CPU. Pass `--allowed`
