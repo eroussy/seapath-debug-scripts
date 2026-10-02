@@ -78,8 +78,14 @@ def read_stat(pid, tid):
     if len(fields) < 37:
         return None
 
-    # proc(5): nice=field 19, processor=39. Array starts at field 3.
-    return {"nice": fields[16], "cpu": fields[36]}
+    # proc(5): utime=field 14, stime=15, nice=19, starttime=22, processor=39.
+    # Array starts at field 3.
+    return {
+        "cpu_time": int(fields[11]) + int(fields[12]),
+        "nice": fields[16],
+        "start_time": int(fields[19]),
+        "cpu": fields[36],
+    }
 
 
 def scheduler(pid, tid):
@@ -126,12 +132,12 @@ def process_ids():
 def print_header(colored):
     header = (
         f"{'TID':>7}  {'THREAD':<24} {'SCHEDULER':<15} {'RTPRIO':>6} "
-        f"{'PRIO':>4} {'LAST_CPU':>8}  AFFINITY"
+        f"{'PRIO':>4} {'LAST_CPU':>8}  {'AFFINITY':<12} {'CPU%':>6}"
     )
     print(colorize(header, "bold") if colored else header)
 
 
-def process_rows(pid):
+def process_rows(pid, uptime, clock_ticks):
     task_dir = PROC / str(pid) / "task"
     try:
         tids = sorted(int(entry.name) for entry in task_dir.iterdir() if entry.name.isdecimal())
@@ -146,6 +152,10 @@ def process_rows(pid):
             continue
         policy, rt_priority = scheduler(pid, tid)
         priority = ps_priority(policy, rt_priority, stat["nice"])
+        elapsed = uptime - stat["start_time"] / clock_ticks
+        cpu_percent = (
+            stat["cpu_time"] / clock_ticks / elapsed * 100 if elapsed > 0 else None
+        )
         rows.append(
             {
                 "tid": tid,
@@ -153,6 +163,7 @@ def process_rows(pid):
                 "scheduler": policy,
                 "rtprio": rt_priority,
                 "prio": priority,
+                "cpu_percent": cpu_percent,
                 "last_cpu": int(stat["cpu"]),
                 "affinity": status.get("Cpus_allowed_list", "?"),
             }
@@ -171,6 +182,9 @@ def print_process(title, rows, colored):
         tid = f"{row['tid']:>7}"
         scheduler = f"{row['scheduler']:<15.15}"
         rtprio = f"{row['rtprio']:>6}"
+        cpu_percent = (
+            f"{row['cpu_percent']:>5.1f}%" if row["cpu_percent"] is not None else "     -"
+        )
         last_cpu = f"{row['last_cpu']:>8}"
         affinity = row["affinity"]
         if colored:
@@ -182,7 +196,7 @@ def print_process(title, rows, colored):
             affinity = colorize(affinity, "cyan")
         print(
             f"{tid}  {row['thread']:<24.24} {scheduler} {rtprio} "
-            f"{row['prio']:>4} {last_cpu}  {affinity}"
+            f"{row['prio']:>4} {last_cpu}  {affinity:<12} {cpu_percent}"
         )
 
 
@@ -237,8 +251,7 @@ def main():
     groups = []
 
     def add_group(pid, title):
-        rows = process_rows(pid)
-        groups.append({"pid": pid, "name": title, "threads": rows})
+        groups.append({"pid": pid, "name": title})
 
     for pid in sorted(qemu_processes):
         name = qemu_names[pid]
@@ -267,6 +280,11 @@ def main():
         else:
             print(f"VM not found: {args.vm_name}", file=sys.stderr)
         return 1
+
+    clock_ticks = os.sysconf("SC_CLK_TCK")
+    uptime = float((read_text(PROC / "uptime") or "0").split()[0])
+    for group in groups:
+        group["threads"] = process_rows(group["pid"], uptime, clock_ticks)
 
     if args.json:
         print(json.dumps({"groups": groups}, indent=2, sort_keys=True))

@@ -5,8 +5,8 @@ Ease SEAPATH debug and deployment
 ## QEMU threads report
 
 Display QEMU/KVM thread ID, name, scheduler, RT priority, priority, last CPU,
-and effective affinity per VM. Pass a VM name to output only that VM and its
-associated `kvm-pit` task.
+CPU usage, and effective affinity per VM.
+Pass a VM name to output only that VM and its associated `kvm-pit` task.
 
 ```sh
 ./qemu_threads_report.py
@@ -14,25 +14,26 @@ associated `kvm-pit` task.
 ./qemu_threads_report.py --json
 ```
 
-Run as root for complete QEMU command-line and thread visibility. `LAST_CPU` is
-procfs last-scheduled CPU snapshot, not proof thread executes on CPU while
-report prints.
+Run as root for complete QEMU command-line and thread visibility.
+`CPU%` is computed as average CPU usage since task start, reported as
+a percentage of one logical CPU.
+`LAST_CPU` is procfs last-scheduled CPU snapshot.
 
 Example:
 
 ```text
 === VM: rtvm (PID 1580) ===
-    TID  THREAD                   SCHEDULER       RTPRIO PRIO LAST_CPU  AFFINITY
-   1580  qemu-system-x86          SCHED_OTHER          0   19        9  9
-   1583  qemu-system-x86          SCHED_OTHER          0   19        9  9
-   1588  vhost-1580               SCHED_RR             1   41        9  9
-   1589  IO mon_iothread          SCHED_OTHER          0   19        9  9
-   1590  CPU 0/KVM                SCHED_FIFO           1   41        5  5
+    TID  THREAD                   SCHEDULER       RTPRIO PRIO LAST_CPU  AFFINITY       CPU%
+   1580  qemu-system-x86          SCHED_OTHER          0   19        9  9              0.0%
+   1583  qemu-system-x86          SCHED_OTHER          0   19        9  9              0.0%
+   1588  vhost-1580               SCHED_RR             1   41        9  9              0.2%
+   1589  IO mon_iothread          SCHED_OTHER          0   19        9  9              0.0%
+   1590  CPU 0/KVM                SCHED_FIFO           1   41        5  5              5.1%
    [...]
 
 === KVM PIT for VM: rtvm (QEMU PID 1580) (PID 1593) ===
-    TID  THREAD                   SCHEDULER       RTPRIO PRIO LAST_CPU  AFFINITY
-   1593  kvm-pit/1580             SCHED_RR             1   41        9  9
+    TID  THREAD                   SCHEDULER       RTPRIO PRIO LAST_CPU  AFFINITY       CPU%
+   1593  kvm-pit/1580             SCHED_RR             1   41        9  9              0.0%
 ```
 
 ## CPU task report
