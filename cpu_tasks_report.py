@@ -6,12 +6,19 @@
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 
 PROC = Path("/proc")
 SYS_CPU = Path("/sys/devices/system/cpu")
+PF_KTHREAD = 0x00200000
+KERNEL_HOUSEKEEPING_THREAD_NAME = re.compile(
+    r"^(?:cpuhp|irq_work|migration|rcuc|ktimers|ksoftirqd|watchdog|backlog_napi|idle_inject)/\d+$"
+    r"|^irq/\d+-.+$"
+    r"|^kworker/\d+:\d+H?(?:-\S+)?$"
+)
 
 COLORS = {
     "reset": "\033[0m",
@@ -62,7 +69,7 @@ def read_status(pid, tid):
     return fields
 
 
-def read_last_cpu(pid, tid):
+def read_task_stat(pid, tid):
     text = read_text(PROC / str(pid) / "task" / str(tid) / "stat")
     if text is None:
         return None
@@ -72,11 +79,11 @@ def read_last_cpu(pid, tid):
     if closing_paren < 0:
         return None
     fields = text[closing_paren + 2 :].split()
-    # proc(5): processor is field 39. Array starts at field 3.
+    # proc(5): flags is field 9 and processor is field 39. Array starts at field 3.
     if len(fields) <= 36:
         return None
     try:
-        return int(fields[36])
+        return int(fields[6]), int(fields[36])
     except ValueError:
         return None
 
@@ -91,7 +98,7 @@ def process_ids():
         return
 
 
-def task_rows(selected_cpus):
+def task_rows(selected_cpus, show_kernel_threads=False):
     running = []
     allowed = []
     skipped = 0
@@ -107,9 +114,17 @@ def task_rows(selected_cpus):
 
         for tid in tids:
             status = read_status(pid, tid)
-            last_cpu = read_last_cpu(pid, tid)
-            if status is None or last_cpu is None:
+            task_stat = read_task_stat(pid, tid)
+            if status is None or task_stat is None:
                 skipped += 1
+                continue
+            flags, last_cpu = task_stat
+
+            if (
+                not show_kernel_threads
+                and flags & PF_KTHREAD
+                and KERNEL_HOUSEKEEPING_THREAD_NAME.fullmatch(status.get("Name", ""))
+            ):
                 continue
 
             affinity_text = status.get("Cpus_allowed_list")
@@ -192,6 +207,11 @@ def main():
         action="store_true",
         help="also show threads allowed on selected CPU(s) but last scheduled elsewhere",
     )
+    parser.add_argument(
+        "--show-kernel-threads",
+        action="store_true",
+        help="include per-CPU kernel housekeeping threads (hidden by default)",
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument(
         "--color",
@@ -215,7 +235,9 @@ def main():
     if offline:
         parser.error(f"requested offline or nonexistent CPU(s): {','.join(map(str, sorted(offline)))}")
 
-    running, allowed, skipped = task_rows(selected_cpus)
+    running, allowed, skipped = task_rows(
+        selected_cpus, show_kernel_threads=args.show_kernel_threads
+    )
     report = {
         "cpus": sorted(selected_cpus),
         "last_scheduled_on_cpus": running,
@@ -227,9 +249,6 @@ def main():
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
-        cpu_list = ",".join(map(str, sorted(selected_cpus)))
-        print(f"Selected CPU(s): {cpu_list}")
-        print("Last CPU is procfs scheduling snapshot, not instantaneous execution.")
         group_by_last_cpu = len(selected_cpus) > 1
         print_rows("Last scheduled on selected CPU(s)", running, colored, group_by_last_cpu)
         if args.allowed:

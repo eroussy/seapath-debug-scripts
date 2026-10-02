@@ -41,18 +41,18 @@ Display every process thread last scheduled on selected CPU. Pass `--allowed`
 to also display threads whose effective affinity allows selected CPU but last
 scheduler snapshot is elsewhere. When multiple CPUs are selected, tasks are
 grouped by last CPU.
+Kernel housekeeping threads are hidden by default. Pass `--show-kernel-threads`
+to include them.
 
 ```sh
 ./cpu_tasks_report.py 4
 ./cpu_tasks_report.py 4-12 --json --allowed
+./cpu_tasks_report.py 4 --show-kernel-threads
 ```
 
-Example:
+Example with `--show-kernel-threads`:
 
 ```text
-Selected CPU(s): 5
-Last CPU is procfs scheduling snapshot, not instantaneous execution.
-
 Last scheduled on selected CPU(s): 13
     PID     TID  PROCESS                  THREAD                   LAST_CPU  AFFINITY
      67      67  cpuhp/5                  cpuhp/5                         5  5
